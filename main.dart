@@ -36,6 +36,9 @@ Map<String, dynamic> get prev {
   return l.first;
 }
 
+// Lulus jika nilai C ke atas (bobot >= 2). Nilai "-", D, dan E dianggap belum lulus.
+bool lulus(String n) => (bobot[n] ?? -1) >= 2.0;
+
 int sksTotal() => (prev['sks'] as num).toInt() + sksDinilai(mk);
 double ipkTotal() {
   final ps = (prev['sks'] as num).toInt();
@@ -212,6 +215,8 @@ class Home extends StatefulWidget {
 
 class _HomeState extends State<Home> {
   int tab = 0;
+  final cariC = TextEditingController();
+  String filterMk = 'semua'; // semua, lulus, belum, perbaikan
   final simSks = TextEditingController(), simIps = TextEditingController();
 
   void refresh() {
@@ -228,6 +233,39 @@ class _HomeState extends State<Home> {
     Db.d['absen']!.removeWhere((e) => e['id'] == m['id']);
     refresh();
   }
+
+  Widget cariBar() => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+        child: TextField(
+          controller: cariC,
+          onChanged: (_) => setState(() {}),
+          decoration: InputDecoration(
+            hintText: ['Cari tugas atau mata kuliah', 'Cari jadwal, dosen, atau ruangan', 'Cari mata kuliah'][tab],
+            prefixIcon: const Icon(Icons.search),
+            suffixIcon: cariC.text.isEmpty
+                ? null
+                : IconButton(icon: const Icon(Icons.close), onPressed: () => setState(() => cariC.clear())),
+            filled: true,
+            fillColor: Colors.white,
+            contentPadding: const EdgeInsets.symmetric(vertical: 0),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
+          ),
+        ),
+      );
+
+  Future<bool> konfirmasi(String judul, String isi) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(judul),
+          content: Text(isi),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Hapus')),
+          ],
+        ),
+      ) ??
+      false;
 
   Future<void> hapusMkKonfirmasi(Map<String, dynamic> m) async {
     final ok = await showDialog<bool>(
@@ -272,11 +310,14 @@ class _HomeState extends State<Home> {
   }
 
   Widget tugasPage() {
-    final l = [...Db.d['tugas']!]..sort((a, b) {
+    final semua = [...Db.d['tugas']!]..sort((a, b) {
         if (a['done'] != b['done']) return (a['done'] as bool) ? 1 : -1;
         return (a['dl'] as String).compareTo(b['dl']);
       });
-    if (l.isEmpty) return kosong(Icons.assignment_outlined, 'Belum ada tugas.\nKetuk + untuk menambah.');
+    final q = cariC.text.trim().toLowerCase();
+    final l = semua.where((t) => q.isEmpty || t['judul'].toLowerCase().contains(q) || namaMk(t['mk']).toLowerCase().contains(q)).toList();
+    if (semua.isEmpty) return kosong(Icons.assignment_outlined, 'Belum ada tugas.\nKetuk + untuk menambah.');
+    if (l.isEmpty) return kosong(Icons.search_off, 'Tidak ditemukan');
     final now = DateTime.now(), today = DateTime(now.year, now.month, now.day);
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 90),
@@ -300,8 +341,20 @@ class _HomeState extends State<Home> {
             child: ListTile(
               leading: Checkbox(value: done, onChanged: (v) { t['done'] = v; refresh(); }),
               title: Text(t['judul'], style: TextStyle(decoration: done ? TextDecoration.lineThrough : null)),
-              subtitle: Text('${namaMk(t['mk'])} • ${tgl(d)}'),
-              trailing: done ? null : Chip(label: Text(info), backgroundColor: telat ? Colors.red.shade100 : dekat ? Colors.orange.shade100 : null),
+              subtitle: Text(
+                '${namaMk(t['mk'])} • ${tgl(d)}${done ? '' : '\n$info'}',
+                style: TextStyle(color: telat ? Colors.red : dekat ? Colors.orange.shade800 : null),
+              ),
+              trailing: IconButton(
+                icon: const Icon(Icons.delete_outline),
+                tooltip: 'Hapus',
+                onPressed: () async {
+                  if (await konfirmasi('Hapus tugas?', '"${t['judul']}" akan dihapus.')) {
+                    Db.d['tugas']!.remove(t);
+                    refresh();
+                  }
+                },
+              ),
               onTap: () => formTugas(t),
             ),
           ),
@@ -340,8 +393,13 @@ class _HomeState extends State<Home> {
   }
 
   Widget jadwalPage() {
-    final l = Db.d['jadwal']!;
-    if (l.isEmpty) return kosong(Icons.calendar_month_outlined, 'Belum ada jadwal.\nKetuk + untuk menambah.');
+    final semua = Db.d['jadwal']!;
+    final q = cariC.text.trim().toLowerCase();
+    final l = semua
+        .where((e) => q.isEmpty || [namaMk(e['mk']), e['dosen'], e['ruang'], e['hari']].any((x) => x.toString().toLowerCase().contains(q)))
+        .toList();
+    if (semua.isEmpty) return kosong(Icons.calendar_month_outlined, 'Belum ada jadwal.\nKetuk + untuk menambah.');
+    if (l.isEmpty) return kosong(Icons.search_off, 'Tidak ditemukan');
     return ListView(padding: const EdgeInsets.fromLTRB(12, 0, 12, 90), children: [
       for (final h in hari)
         ...(() {
@@ -353,7 +411,7 @@ class _HomeState extends State<Home> {
                   key: ValueKey(e['id']),
                   direction: DismissDirection.endToStart,
                   background: hapusBg(),
-                  onDismissed: (_) { l.remove(e); refresh(); },
+                  onDismissed: (_) { semua.remove(e); refresh(); },
                   child: Card(
                     child: ListTile(
                       leading: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
@@ -363,7 +421,12 @@ class _HomeState extends State<Home> {
                       title: Text(namaMk(e['mk']), style: const TextStyle(fontWeight: FontWeight.w600)),
                       subtitle: Text('Ruang ${e['ruang'].isEmpty ? '-' : e['ruang']} • ${e['dosen'].isEmpty ? '-' : e['dosen']}'),
                       onTap: () => formJadwal(e),
-                      trailing: IconButton(icon: const Icon(Icons.delete_outline), tooltip: 'Hapus', onPressed: () { l.remove(e); refresh(); }),
+                      trailing: IconButton(icon: const Icon(Icons.delete_outline), tooltip: 'Hapus', onPressed: () async {
+                        if (await konfirmasi('Hapus jadwal?', '${namaMk(e['mk'])} hari ${e['hari']} akan dihapus.')) {
+                          semua.remove(e);
+                          refresh();
+                        }
+                      }),
                     ),
                   ),
                 )),
@@ -375,6 +438,9 @@ class _HomeState extends State<Home> {
   // ---------- ABSENSI ----------
   Widget absenPage() {
     if (mk.isEmpty) return kosong(Icons.fact_check_outlined, 'Tambah mata kuliah dulu di tab IPK');
+    final q = cariC.text.trim().toLowerCase();
+    final daftar = mk.where((m) => q.isEmpty || m['nama'].toLowerCase().contains(q)).toList();
+    if (daftar.isEmpty) return kosong(Icons.search_off, 'Tidak ditemukan');
     const kat = [['h', 'Hadir'], ['i', 'Izin'], ['s', 'Sakit'], ['a', 'Alpa']];
     Color warnaKat(String k) => k == 'h' ? Colors.green : k == 'a' ? Colors.red : Colors.orange;
     return ListView(padding: const EdgeInsets.fromLTRB(12, 8, 12, 24), children: [
@@ -382,7 +448,7 @@ class _HomeState extends State<Home> {
         padding: EdgeInsets.all(4),
         child: Text('Salah input? Tekan tombol minus (-) untuk mengurangi.', style: TextStyle(color: Colors.grey)),
       ),
-      ...mk.map((m) {
+      ...daftar.map((m) {
         final a = absen(m['id']);
         int n(String k) => (a[k] ?? 0) as int;
         final tot = n('h') + n('i') + n('s') + n('a');
@@ -395,6 +461,16 @@ class _HomeState extends State<Home> {
               Row(children: [
                 Expanded(child: Text(m['nama'], style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
                 Text('${p.toStringAsFixed(0)}%', style: TextStyle(color: c, fontSize: 22, fontWeight: FontWeight.bold)),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline),
+                  tooltip: 'Hapus catatan absensi',
+                  onPressed: () async {
+                    if (await konfirmasi('Hapus catatan absensi?', 'Semua hitungan absensi ${m['nama']} kembali ke 0.')) {
+                      Db.d['absen']!.removeWhere((x) => x['id'] == m['id']);
+                      refresh();
+                    }
+                  },
+                ),
               ]),
               const SizedBox(height: 8),
               LinearProgressIndicator(value: p / 100, color: c, minHeight: 8, borderRadius: BorderRadius.circular(8)),
@@ -476,6 +552,12 @@ class _HomeState extends State<Home> {
 
   Widget ipkPage() {
     final sks = sksTotal(), total = ipkTotal();
+    bool cocok(Map<String, dynamic> m, String f) =>
+        f == 'semua' ||
+        (f == 'lulus' && lulus(m['nilai'])) ||
+        (f == 'belum' && !lulus(m['nilai'])) ||
+        (f == 'perbaikan' && m['nilai'] == 'C');
+    final tampil = mk.where((m) => cocok(m, filterMk)).toList();
     final sem = mk.map((m) => m['sem'] as int).toSet().toList()..sort();
     final s = int.tryParse(simSks.text), g = double.tryParse(simIps.text.replaceAll(',', '.'));
     final hasil = (s != null && g != null && s > 0) ? (total * sks + g * s) / (sks + s) : null;
@@ -528,8 +610,31 @@ class _HomeState extends State<Home> {
             ),
           )),
       judulBagian(context, 'Daftar Mata Kuliah'),
+      const Padding(padding: EdgeInsets.symmetric(horizontal: 4), child: Text('Standar lulus: nilai C ke atas.', style: TextStyle(color: Colors.grey))),
+      if (mk.any((m) => !lulus(m['nilai'])))
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
+          child: Text('${mk.where((m) => !lulus(m['nilai'])).length} mata kuliah berwarna merah (nilai D, E, atau belum ada).',
+              style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
+        ),
+      if (mk.isNotEmpty)
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(children: [
+            for (final f in [['semua', 'Semua'], ['lulus', 'Lulus'], ['belum', 'Belum lulus'], ['perbaikan', 'Perbaikan (C)']])
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ChoiceChip(
+                  label: Text('${f[1]} (${mk.where((m) => cocok(m, f[0])).length})'),
+                  selected: filterMk == f[0],
+                  onSelected: (_) => setState(() => filterMk = f[0]),
+                ),
+              ),
+          ]),
+        ),
       if (mk.isEmpty) const Padding(padding: EdgeInsets.all(20), child: Center(child: Text('Belum ada mata kuliah. Ketuk + untuk menambah.', style: TextStyle(color: Colors.grey)))),
-      ...mk.map((m) => Dismissible(
+      if (mk.isNotEmpty && tampil.isEmpty) const Padding(padding: EdgeInsets.all(20), child: Center(child: Text('Tidak ada mata kuliah pada filter ini.', style: TextStyle(color: Colors.grey)))),
+      ...tampil.map((m) => Dismissible(
             key: ValueKey(m['id']),
             direction: DismissDirection.endToStart,
             background: hapusBg(),
@@ -549,9 +654,18 @@ class _HomeState extends State<Home> {
             onDismissed: (_) => hapusMk(m),
             child: Card(
               child: ListTile(
-                leading: CircleAvatar(child: Text(m['nilai'])),
-                title: Text(m['nama']),
-                subtitle: Text('Semester ${m['sem']} • ${m['sks']} SKS'),
+                tileColor: lulus(m['nilai']) ? null : Colors.red.shade50,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                leading: CircleAvatar(
+                  backgroundColor: lulus(m['nilai']) ? null : Colors.red,
+                  foregroundColor: lulus(m['nilai']) ? null : Colors.white,
+                  child: Text(m['nilai']),
+                ),
+                title: Text(m['nama'], style: TextStyle(color: lulus(m['nilai']) ? null : Colors.red, fontWeight: lulus(m['nilai']) ? null : FontWeight.bold)),
+                subtitle: Text(
+                  'Semester ${m['sem']} • ${m['sks']} SKS${lulus(m['nilai']) ? '' : (m['nilai'] == '-' ? ' • Belum ada nilai' : ' • Belum lulus')}',
+                  style: TextStyle(color: lulus(m['nilai']) ? null : Colors.red),
+                ),
                 onTap: () => formMk(m),
                 trailing: IconButton(icon: const Icon(Icons.delete_outline), tooltip: 'Hapus', onPressed: () => hapusMkKonfirmasi(m)),
               ),
@@ -569,7 +683,7 @@ class _HomeState extends State<Home> {
         backgroundColor: Colors.transparent,
         title: Row(children: [const Logo(32), const SizedBox(width: 10), Text(judul[tab], style: const TextStyle(fontWeight: FontWeight.bold))]),
       ),
-      body: [tugasPage(), jadwalPage(), absenPage(), ipkPage()][tab],
+      body: tab == 3 ? ipkPage() : Column(children: [cariBar(), Expanded(child: [tugasPage, jadwalPage, absenPage][tab]())]),
       floatingActionButton: tab == 2
           ? null
           : FloatingActionButton.extended(
@@ -579,7 +693,10 @@ class _HomeState extends State<Home> {
             ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: tab,
-        onDestinationSelected: (i) => setState(() => tab = i),
+        onDestinationSelected: (i) => setState(() {
+          tab = i;
+          cariC.clear();
+        }),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.checklist_rounded), label: 'Tugas'),
           NavigationDestination(icon: Icon(Icons.calendar_month), label: 'Jadwal'),
