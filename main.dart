@@ -28,6 +28,7 @@ class Db {
 }
 
 List<Map<String, dynamic>> get mk => Db.d['mk']!;
+List<Map<String, dynamic>> get mkAktif => mk.where((m) => (m['status'] ?? 'aktif') == 'aktif').toList();
 
 // IPK dan total SKS semester sebelumnya (diisi manual oleh pengguna)
 Map<String, dynamic> get prev {
@@ -70,7 +71,8 @@ Map<String, dynamic> absen(String id) {
   });
 }
 
-List<DropdownMenuItem<String>> mkItems() => mk
+List<DropdownMenuItem<String>> mkItems([String? termasuk]) => mk
+    .where((m) => (m['status'] ?? 'aktif') == 'aktif' || m['id'] == termasuk)
     .map((m) => DropdownMenuItem<String>(value: m['id'] as String, child: Text(m['nama'], overflow: TextOverflow.ellipsis)))
     .toList();
 
@@ -217,6 +219,7 @@ class _HomeState extends State<Home> {
   int tab = 0;
   final cariC = TextEditingController();
   String filterMk = 'semua'; // semua, lulus, belum, perbaikan
+  String statusTab = 'berjalan'; // berjalan atau selesai
   final simSks = TextEditingController(), simIps = TextEditingController();
 
   void refresh() {
@@ -233,6 +236,27 @@ class _HomeState extends State<Home> {
     Db.d['absen']!.removeWhere((e) => e['id'] == m['id']);
     refresh();
   }
+
+  bool cocokStatus(String idMk) {
+    final m = mk.where((x) => x['id'] == idMk).firstOrNull;
+    final berjalan = m == null || (m['status'] ?? 'aktif') == 'aktif';
+    return berjalan == (statusTab == 'berjalan');
+  }
+
+  Widget statusBar() => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+        child: Row(children: [
+          for (final f in [['berjalan', 'Sedang berjalan'], ['selesai', 'Selesai']])
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text(f[1]),
+                selected: statusTab == f[0],
+                onSelected: (_) => setState(() => statusTab = f[0]),
+              ),
+            ),
+        ]),
+      );
 
   Widget cariBar() => Padding(
         padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
@@ -284,13 +308,13 @@ class _HomeState extends State<Home> {
 
   // ---------- TUGAS ----------
   void formTugas([Map<String, dynamic>? t]) async {
-    if (mk.isEmpty) return snack('Tambah mata kuliah dulu di tab IPK');
+    if (t == null && mkAktif.isEmpty) return snack('Belum ada mata kuliah yang sedang berjalan. Tambah di tab IPK.');
     final j = TextEditingController(text: t?['judul'] ?? '');
-    String m = t?['mk'] ?? mk.first['id'];
+    String m = t?['mk'] ?? mkAktif.first['id'];
     DateTime d = t != null ? DateTime.parse(t['dl']) : DateTime.now().add(const Duration(days: 1));
     await form(context, t == null ? 'Tambah Tugas' : 'Edit Tugas', (set) => Column(children: [
           tf(j, 'Judul tugas'),
-          dd('Mata kuliah', m, mkItems(), (v) => set(() => m = v!)),
+          dd('Mata kuliah', m, mkItems(t?['mk']), (v) => set(() => m = v!)),
           OutlinedButton.icon(
             icon: const Icon(Icons.event),
             label: Text('Deadline: ${tgl(d)}'),
@@ -315,9 +339,9 @@ class _HomeState extends State<Home> {
         return (a['dl'] as String).compareTo(b['dl']);
       });
     final q = cariC.text.trim().toLowerCase();
-    final l = semua.where((t) => q.isEmpty || t['judul'].toLowerCase().contains(q) || namaMk(t['mk']).toLowerCase().contains(q)).toList();
+    final l = semua.where((t) => cocokStatus(t['mk']) && (q.isEmpty || t['judul'].toLowerCase().contains(q) || namaMk(t['mk']).toLowerCase().contains(q))).toList();
     if (semua.isEmpty) return kosong(Icons.assignment_outlined, 'Belum ada tugas.\nKetuk + untuk menambah.');
-    if (l.isEmpty) return kosong(Icons.search_off, 'Tidak ditemukan');
+    if (l.isEmpty) return kosong(Icons.search_off, 'Tidak ada data yang sesuai');
     final now = DateTime.now(), today = DateTime(now.year, now.month, now.day);
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 90),
@@ -365,8 +389,8 @@ class _HomeState extends State<Home> {
 
   // ---------- JADWAL ----------
   void formJadwal([Map<String, dynamic>? t]) async {
-    if (mk.isEmpty) return snack('Tambah mata kuliah dulu di tab IPK');
-    String m = t?['mk'] ?? mk.first['id'], h = t?['hari'] ?? hari.first, a = t?['mulai'] ?? '08:00', b = t?['selesai'] ?? '09:40';
+    if (t == null && mkAktif.isEmpty) return snack('Belum ada mata kuliah yang sedang berjalan. Tambah di tab IPK.');
+    String m = t?['mk'] ?? mkAktif.first['id'], h = t?['hari'] ?? hari.first, a = t?['mulai'] ?? '08:00', b = t?['selesai'] ?? '09:40';
     final r = TextEditingController(text: t?['ruang'] ?? ''), ds = TextEditingController(text: t?['dosen'] ?? '');
     Future<String?> jam(String cur) async {
       final p = await showTimePicker(context: context, initialTime: TimeOfDay(hour: int.parse(cur.substring(0, 2)), minute: int.parse(cur.substring(3))));
@@ -374,7 +398,7 @@ class _HomeState extends State<Home> {
     }
 
     await form(context, t == null ? 'Tambah Jadwal' : 'Edit Jadwal', (set) => Column(children: [
-          dd('Mata kuliah', m, mkItems(), (v) => set(() => m = v!)),
+          dd('Mata kuliah', m, mkItems(t?['mk']), (v) => set(() => m = v!)),
           dd('Hari', h, hari.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(), (v) => set(() => h = v!)),
           Row(children: [
             Expanded(child: OutlinedButton(onPressed: () async { final x = await jam(a); if (x != null) set(() => a = x); }, child: Text('Mulai $a'))),
@@ -396,10 +420,10 @@ class _HomeState extends State<Home> {
     final semua = Db.d['jadwal']!;
     final q = cariC.text.trim().toLowerCase();
     final l = semua
-        .where((e) => q.isEmpty || [namaMk(e['mk']), e['dosen'], e['ruang'], e['hari']].any((x) => x.toString().toLowerCase().contains(q)))
+        .where((e) => cocokStatus(e['mk']) && (q.isEmpty || [namaMk(e['mk']), e['dosen'], e['ruang'], e['hari']].any((x) => x.toString().toLowerCase().contains(q))))
         .toList();
     if (semua.isEmpty) return kosong(Icons.calendar_month_outlined, 'Belum ada jadwal.\nKetuk + untuk menambah.');
-    if (l.isEmpty) return kosong(Icons.search_off, 'Tidak ditemukan');
+    if (l.isEmpty) return kosong(Icons.search_off, 'Tidak ada data yang sesuai');
     return ListView(padding: const EdgeInsets.fromLTRB(12, 0, 12, 90), children: [
       for (final h in hari)
         ...(() {
@@ -439,8 +463,8 @@ class _HomeState extends State<Home> {
   Widget absenPage() {
     if (mk.isEmpty) return kosong(Icons.fact_check_outlined, 'Tambah mata kuliah dulu di tab IPK');
     final q = cariC.text.trim().toLowerCase();
-    final daftar = mk.where((m) => q.isEmpty || m['nama'].toLowerCase().contains(q)).toList();
-    if (daftar.isEmpty) return kosong(Icons.search_off, 'Tidak ditemukan');
+    final daftar = mk.where((m) => cocokStatus(m['id']) && (q.isEmpty || m['nama'].toLowerCase().contains(q))).toList();
+    if (daftar.isEmpty) return kosong(Icons.search_off, 'Tidak ada data yang sesuai');
     const kat = [['h', 'Hadir'], ['i', 'Izin'], ['s', 'Sakit'], ['a', 'Alpa']];
     Color warnaKat(String k) => k == 'h' ? Colors.green : k == 'a' ? Colors.red : Colors.orange;
     return ListView(padding: const EdgeInsets.fromLTRB(12, 8, 12, 24), children: [
@@ -508,6 +532,7 @@ class _HomeState extends State<Home> {
     final s = TextEditingController(text: t?['sks']?.toString() ?? '');
     final sm = TextEditingController(text: t?['sem']?.toString() ?? '');
     String nilai = t?['nilai'] ?? '-';
+    String status = t?['status'] ?? 'aktif';
     await form(context, t == null ? 'Tambah Mata Kuliah' : 'Edit Mata Kuliah', (set) => Column(children: [
           tf(n, 'Nama mata kuliah'),
           Row(children: [
@@ -515,11 +540,21 @@ class _HomeState extends State<Home> {
             const SizedBox(width: 8),
             Expanded(child: tf(sm, 'Semester', num: true)),
           ]),
-          dd('Nilai (pilih "-" jika belum ada)', nilai, ['-', ...bobot.keys].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(), (v) => set(() => nilai = v!)),
+          dd('Nilai (pilih "-" jika belum ada)', nilai, ['-', ...bobot.keys].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(), (v) => set(() {
+                nilai = v!;
+                if (nilai != '-') status = 'selesai';
+              })),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Mata kuliah sudah selesai'),
+            subtitle: const Text('Tugas, jadwal, dan absensinya pindah ke tab Selesai'),
+            value: status == 'selesai',
+            onChanged: (v) => set(() => status = v ? 'selesai' : 'aktif'),
+          ),
         ]), () {
       final sk = int.tryParse(s.text), se = int.tryParse(sm.text);
       if (n.text.trim().isEmpty || sk == null || se == null) return false;
-      final x = {'id': t?['id'] ?? uid(), 'nama': n.text.trim(), 'sks': sk, 'sem': se, 'nilai': nilai};
+      final x = {'id': t?['id'] ?? uid(), 'nama': n.text.trim(), 'sks': sk, 'sem': se, 'nilai': nilai, 'status': status};
       t == null ? mk.add(x) : t.addAll(x);
       return true;
     });
@@ -663,7 +698,7 @@ class _HomeState extends State<Home> {
                 ),
                 title: Text(m['nama'], style: TextStyle(color: lulus(m['nilai']) ? null : Colors.red, fontWeight: lulus(m['nilai']) ? null : FontWeight.bold)),
                 subtitle: Text(
-                  'Semester ${m['sem']} • ${m['sks']} SKS${lulus(m['nilai']) ? '' : (m['nilai'] == '-' ? ' • Belum ada nilai' : ' • Belum lulus')}',
+                  'Semester ${m['sem']} • ${m['sks']} SKS • ${(m['status'] ?? 'aktif') == 'selesai' ? 'Selesai' : 'Berjalan'}${lulus(m['nilai']) ? '' : (m['nilai'] == '-' ? ' • Belum ada nilai' : ' • Belum lulus')}',
                   style: TextStyle(color: lulus(m['nilai']) ? null : Colors.red),
                 ),
                 onTap: () => formMk(m),
@@ -683,7 +718,7 @@ class _HomeState extends State<Home> {
         backgroundColor: Colors.transparent,
         title: Row(children: [const Logo(32), const SizedBox(width: 10), Text(judul[tab], style: const TextStyle(fontWeight: FontWeight.bold))]),
       ),
-      body: tab == 3 ? ipkPage() : Column(children: [cariBar(), Expanded(child: [tugasPage, jadwalPage, absenPage][tab]())]),
+      body: tab == 3 ? ipkPage() : Column(children: [cariBar(), statusBar(), Expanded(child: [tugasPage, jadwalPage, absenPage][tab]())]),
       floatingActionButton: tab == 2
           ? null
           : FloatingActionButton.extended(
