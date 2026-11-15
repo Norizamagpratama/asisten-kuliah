@@ -13,7 +13,7 @@ class Db {
   static final Map<String, List<Map<String, dynamic>>> d = {};
   static Future<void> load() async {
     final p = await SharedPreferences.getInstance();
-    for (final k in ['mk', 'tugas', 'jadwal', 'absen']) {
+    for (final k in ['mk', 'tugas', 'jadwal', 'absen', 'prev']) {
       d[k] = (jsonDecode(p.getString(k) ?? '[]') as List)
           .map((e) => Map<String, dynamic>.from(e)).toList();
     }
@@ -28,6 +28,22 @@ class Db {
 }
 
 List<Map<String, dynamic>> get mk => Db.d['mk']!;
+
+// IPK dan total SKS semester sebelumnya (diisi manual oleh pengguna)
+Map<String, dynamic> get prev {
+  final l = Db.d['prev']!;
+  if (l.isEmpty) l.add({'ipk': 0.0, 'sks': 0});
+  return l.first;
+}
+
+int sksTotal() => (prev['sks'] as num).toInt() + sksDinilai(mk);
+double ipkTotal() {
+  final ps = (prev['sks'] as num).toInt();
+  final pi = (prev['ipk'] as num).toDouble();
+  final poin = dinilai(mk).fold<double>(0, (a, m) => a + bobot[m['nilai']]! * (m['sks'] as int));
+  final tot = ps + sksDinilai(mk);
+  return tot == 0 ? 0 : (pi * ps + poin) / tot;
+}
 
 // ================== FUNGSI BANTU ==================
 String uid() => DateTime.now().microsecondsSinceEpoch.toString();
@@ -45,7 +61,7 @@ double ipk(Iterable<Map<String, dynamic>> l) {
 Map<String, dynamic> absen(String id) {
   final l = Db.d['absen']!;
   return l.firstWhere((x) => x['id'] == id, orElse: () {
-    final n = {'id': id, 'h': 0, 'i': 0, 'a': 0};
+    final n = {'id': id, 'h': 0, 'i': 0, 's': 0, 'a': 0};
     l.add(n);
     return n;
   });
@@ -213,6 +229,21 @@ class _HomeState extends State<Home> {
     refresh();
   }
 
+  Future<void> hapusMkKonfirmasi(Map<String, dynamic> m) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Hapus "${m['nama']}"?'),
+        content: const Text('Tugas, jadwal, dan absensi mata kuliah ini ikut terhapus.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Hapus')),
+        ],
+      ),
+    );
+    if (ok == true) hapusMk(m);
+  }
+
   // ---------- TUGAS ----------
   void formTugas([Map<String, dynamic>? t]) async {
     if (mk.isEmpty) return snack('Tambah mata kuliah dulu di tab IPK');
@@ -332,6 +363,7 @@ class _HomeState extends State<Home> {
                       title: Text(namaMk(e['mk']), style: const TextStyle(fontWeight: FontWeight.w600)),
                       subtitle: Text('Ruang ${e['ruang'].isEmpty ? '-' : e['ruang']} • ${e['dosen'].isEmpty ? '-' : e['dosen']}'),
                       onTap: () => formJadwal(e),
+                      trailing: IconButton(icon: const Icon(Icons.delete_outline), tooltip: 'Hapus', onPressed: () { l.remove(e); refresh(); }),
                     ),
                   ),
                 )),
@@ -343,23 +375,18 @@ class _HomeState extends State<Home> {
   // ---------- ABSENSI ----------
   Widget absenPage() {
     if (mk.isEmpty) return kosong(Icons.fact_check_outlined, 'Tambah mata kuliah dulu di tab IPK');
-    Widget btn(String label, String k, Map<String, dynamic> a, Color c) => Expanded(
-          child: Padding(
-            padding: const EdgeInsets.only(right: 6),
-            child: FilledButton.tonal(
-              style: FilledButton.styleFrom(backgroundColor: c.withOpacity(.15), foregroundColor: c),
-              onPressed: () { a[k] = (a[k] as int) + 1; refresh(); },
-              onLongPress: () { if (a[k] > 0) { a[k] = (a[k] as int) - 1; refresh(); } },
-              child: Text('+ $label'),
-            ),
-          ),
-        );
+    const kat = [['h', 'Hadir'], ['i', 'Izin'], ['s', 'Sakit'], ['a', 'Alpa']];
+    Color warnaKat(String k) => k == 'h' ? Colors.green : k == 'a' ? Colors.red : Colors.orange;
     return ListView(padding: const EdgeInsets.fromLTRB(12, 8, 12, 24), children: [
-      const Padding(padding: EdgeInsets.all(4), child: Text('Tekan lama tombol untuk mengurangi hitungan.', style: TextStyle(color: Colors.grey))),
+      const Padding(
+        padding: EdgeInsets.all(4),
+        child: Text('Salah input? Tekan tombol minus (-) untuk mengurangi.', style: TextStyle(color: Colors.grey)),
+      ),
       ...mk.map((m) {
         final a = absen(m['id']);
-        final h = a['h'] as int, i = a['i'] as int, al = a['a'] as int, tot = h + i + al;
-        final p = tot == 0 ? 100.0 : h / tot * 100;
+        int n(String k) => (a[k] ?? 0) as int;
+        final tot = n('h') + n('i') + n('s') + n('a');
+        final p = tot == 0 ? 100.0 : n('h') / tot * 100;
         final c = p < batasHadir ? Colors.red : p < 85 ? Colors.orange : Colors.green;
         return Card(
           child: Padding(
@@ -371,11 +398,27 @@ class _HomeState extends State<Home> {
               ]),
               const SizedBox(height: 8),
               LinearProgressIndicator(value: p / 100, color: c, minHeight: 8, borderRadius: BorderRadius.circular(8)),
-              const SizedBox(height: 8),
-              Text('Hadir $h • Izin/Sakit $i • Alpa $al  (total $tot)'),
-              if (p < batasHadir) Text('⚠ Di bawah batas minimal ${batasHadir.toStringAsFixed(0)}%', style: const TextStyle(color: Colors.red)),
-              const SizedBox(height: 10),
-              Row(children: [btn('Hadir', 'h', a, Colors.green), btn('Izin', 'i', a, Colors.orange), btn('Alpa', 'a', a, Colors.red)]),
+              const SizedBox(height: 6),
+              Text('Total pertemuan tercatat: $tot'),
+              if (p < batasHadir) Text('Di bawah batas minimal ${batasHadir.toStringAsFixed(0)}%', style: const TextStyle(color: Colors.red)),
+              const SizedBox(height: 6),
+              for (final k in kat)
+                Row(children: [
+                  Icon(Icons.circle, size: 12, color: warnaKat(k[0])),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(k[1], style: const TextStyle(fontSize: 15))),
+                  IconButton.outlined(
+                    tooltip: 'Kurangi ${k[1]}',
+                    icon: const Icon(Icons.remove),
+                    onPressed: n(k[0]) > 0 ? () { a[k[0]] = n(k[0]) - 1; refresh(); } : null,
+                  ),
+                  SizedBox(width: 44, child: Text('${n(k[0])}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                  IconButton.filled(
+                    tooltip: 'Tambah ${k[1]}',
+                    icon: const Icon(Icons.add),
+                    onPressed: () { a[k[0]] = n(k[0]) + 1; refresh(); },
+                  ),
+                ]),
             ]),
           ),
         );
@@ -407,8 +450,32 @@ class _HomeState extends State<Home> {
     refresh();
   }
 
+  void formPrev() async {
+    final i = TextEditingController(text: (prev['ipk'] as num) == 0 ? '' : prev['ipk'].toString());
+    final s = TextEditingController(text: (prev['sks'] as num) == 0 ? '' : prev['sks'].toString());
+    await form(context, 'IPK Semester Lalu', (set) => Column(children: [
+          const Padding(
+            padding: EdgeInsets.only(bottom: 10),
+            child: Text('Isi jika IPK kamu mencakup semester yang tidak dicatat di aplikasi ini.', style: TextStyle(color: Colors.grey)),
+          ),
+          tf(i, 'IPK semester lalu (contoh 3,45)', num: true),
+          tf(s, 'Total SKS semester lalu', num: true),
+        ]), () {
+      final ik = double.tryParse(i.text.replaceAll(',', '.')) ?? 0;
+      final sk = int.tryParse(s.text) ?? 0;
+      if (ik < 0 || ik > 4 || (ik > 0) != (sk > 0)) {
+        snack('IPK harus 0-4, dan SKS wajib diisi bersama IPK');
+        return false;
+      }
+      prev['ipk'] = ik;
+      prev['sks'] = sk;
+      return true;
+    });
+    refresh();
+  }
+
   Widget ipkPage() {
-    final sks = sksDinilai(mk), total = ipk(mk);
+    final sks = sksTotal(), total = ipkTotal();
     final sem = mk.map((m) => m['sem'] as int).toSet().toList()..sort();
     final s = int.tryParse(simSks.text), g = double.tryParse(simIps.text.replaceAll(',', '.'));
     final hasil = (s != null && g != null && s > 0) ? (total * sks + g * s) / (sks + s) : null;
@@ -420,8 +487,19 @@ class _HomeState extends State<Home> {
           child: Column(children: [
             const Text('IPK', style: TextStyle(color: Colors.white70, fontSize: 16)),
             Text(total.toStringAsFixed(2), style: const TextStyle(color: Colors.white, fontSize: 56, fontWeight: FontWeight.bold)),
-            Text('$sks SKS sudah dinilai', style: const TextStyle(color: Colors.white70)),
+            Text('$sks SKS (termasuk semester lalu)', style: const TextStyle(color: Colors.white70)),
           ]),
+        ),
+      ),
+      Card(
+        child: ListTile(
+          leading: const Icon(Icons.history_edu),
+          title: const Text('IPK semester lalu'),
+          subtitle: Text((prev['sks'] as num) == 0
+              ? 'Belum diisi. Ketuk untuk mengisi.'
+              : 'IPK ${(prev['ipk'] as num).toStringAsFixed(2)} • ${prev['sks']} SKS'),
+          trailing: const Icon(Icons.edit_outlined),
+          onTap: formPrev,
         ),
       ),
       Card(
@@ -475,6 +553,7 @@ class _HomeState extends State<Home> {
                 title: Text(m['nama']),
                 subtitle: Text('Semester ${m['sem']} • ${m['sks']} SKS'),
                 onTap: () => formMk(m),
+                trailing: IconButton(icon: const Icon(Icons.delete_outline), tooltip: 'Hapus', onPressed: () => hapusMkKonfirmasi(m)),
               ),
             ),
           )),
