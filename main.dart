@@ -561,6 +561,51 @@ class _HomeState extends State<Home> {
     refresh();
   }
 
+  void detailSemester(int x) {
+    final l = mk.where((m) => m['sem'] == x).toList();
+    final gagal = l.where((m) => !lulus(m['nilai'])).length;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * .75),
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            children: [
+              Text('Semester $x', style: Theme.of(ctx).textTheme.titleLarge),
+              Text('IPS ${ipk(l).toStringAsFixed(2)} • ${sksDinilai(l)} SKS dinilai • ${l.length} mata kuliah', style: const TextStyle(color: Colors.grey)),
+              if (gagal > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text('$gagal mata kuliah belum lulus (nilai D, E, atau belum ada)', style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
+                ),
+              const SizedBox(height: 8),
+              ...l.map((m) => Card(
+                    child: ListTile(
+                      tileColor: lulus(m['nilai']) ? null : Colors.red.shade50,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      leading: CircleAvatar(
+                        backgroundColor: lulus(m['nilai']) ? null : Colors.red,
+                        foregroundColor: lulus(m['nilai']) ? null : Colors.white,
+                        child: Text(m['nilai']),
+                      ),
+                      title: Text(m['nama'], style: TextStyle(color: lulus(m['nilai']) ? null : Colors.red, fontWeight: lulus(m['nilai']) ? null : FontWeight.bold)),
+                      subtitle: Text(
+                        '${m['sks']} SKS${lulus(m['nilai']) ? '' : (m['nilai'] == '-' ? ' • Belum ada nilai' : ' • Belum lulus')}',
+                        style: TextStyle(color: lulus(m['nilai']) ? null : Colors.red),
+                      ),
+                    ),
+                  )),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   void formPrev() async {
     final i = TextEditingController(text: (prev['ipk'] as num) == 0 ? '' : prev['ipk'].toString());
     final s = TextEditingController(text: (prev['sks'] as num) == 0 ? '' : prev['sks'].toString());
@@ -637,10 +682,15 @@ class _HomeState extends State<Home> {
         ),
       ),
       if (sem.isNotEmpty) judulBagian(context, 'IPS per Semester'),
+      if (sem.isNotEmpty) const Padding(padding: EdgeInsets.symmetric(horizontal: 4), child: Text('Ketuk semester untuk melihat mata kuliah dan nilainya.', style: TextStyle(color: Colors.grey))),
       ...sem.map((x) => Card(
             child: ListTile(
               title: Text('Semester $x'),
-              subtitle: Text('${mk.where((m) => m['sem'] == x).length} mata kuliah'),
+              subtitle: Text(
+                '${mk.where((m) => m['sem'] == x).length} mata kuliah${mk.any((m) => m['sem'] == x && !lulus(m['nilai'])) ? ' • ada yang belum lulus' : ''}',
+                style: TextStyle(color: mk.any((m) => m['sem'] == x && !lulus(m['nilai'])) ? Colors.red : null),
+              ),
+              onTap: () => detailSemester(x),
               trailing: Text('IPS ${ipk(mk.where((m) => m['sem'] == x)).toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             ),
           )),
