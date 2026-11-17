@@ -1,11 +1,11 @@
-name: Build APK Asisten Kuliah
+name: Build Android dan iOS Asisten Kuliah
 
 on:
   push:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,3 +36,38 @@ jobs:
         with:
           name: asisten-kuliah-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Siapkan proyek Flutter (iOS)
+        run: |
+          flutter create --project-name asisten_kuliah --org com.asistenkuliah --platforms ios .
+          cp main.dart lib/main.dart
+          flutter pub add shared_preferences
+          flutter pub add --dev flutter_launcher_icons
+          sed -i '' 's/android: true/android: false/; s/ios: false/ios: true/' flutter_launcher_icons.yaml
+          echo '  remove_alpha_ios: true' >> flutter_launcher_icons.yaml
+          dart run flutter_launcher_icons
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Asisten Kuliah" ios/Runner/Info.plist
+
+      - name: Build iOS (tanpa tanda tangan)
+        run: flutter build ios --release --no-codesign
+
+      - name: Buat file IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -r asisten-kuliah.ipa Payload
+
+      - name: Simpan IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: asisten-kuliah-ipa
+          path: asisten-kuliah.ipa
